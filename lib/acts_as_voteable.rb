@@ -110,7 +110,7 @@ module ThumbsUp
         # with multiple 'having' clauses. So we hack them all into one for now.
         # If you have a more elegant solution, a pull request on Github would be greatly appreciated.
         t = t.having([
-            "#{vote_count} > 0",
+            "#{vote_count} >= 0",
             (options[:at_least] ? "#{vote_count} >= #{sanitize(options[:at_least])}" : nil),
             (options[:at_most] ? "#{vote_count} <= #{sanitize(options[:at_most])}" : nil)
             ].compact.join(' AND '))
