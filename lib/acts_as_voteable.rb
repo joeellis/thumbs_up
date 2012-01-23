@@ -94,7 +94,10 @@ module ThumbsUp
         # Use the explicit SQL statement throughout for Postgresql compatibility.
         vote_count = "COUNT(#{Vote.table_name}.voteable_id)"
 
-        t = self.where("#{Vote.table_name}.voteable_type = '#{self.name}'")
+        # Column commented out to support showing 0 votes for models.  This line won't work as
+        # if there are no votes for a model, then it can't filter by this where clause, so the
+        # results come out as null, instead of just counting it as 0.
+        # t = self.where("#{Vote.table_name}.voteable_type = '#{self.name}'")
 
         # We join so that you can order by columns on the voteable model.
         t = t.joins("LEFT OUTER JOIN #{Vote.table_name} ON #{self.table_name}.#{self.primary_key} = #{Vote.table_name}.voteable_id")
