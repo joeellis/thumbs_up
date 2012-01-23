@@ -100,7 +100,7 @@ module ThumbsUp
         # t = self.where("#{Vote.table_name}.voteable_type = '#{self.name}'")
 
         # We join so that you can order by columns on the voteable model.
-        t = t.joins("LEFT OUTER JOIN #{Vote.table_name} ON #{self.table_name}.#{self.primary_key} = #{Vote.table_name}.voteable_id")
+        t = self.joins("LEFT OUTER JOIN #{Vote.table_name} ON #{self.table_name}.#{self.primary_key} = #{Vote.table_name}.voteable_id")
 
         t = t.group("#{Vote.table_name}.voteable_id, #{column_names_for_tally}")
         t = t.limit(options[:limit]) if options[:limit]
