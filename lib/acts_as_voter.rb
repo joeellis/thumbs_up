@@ -12,8 +12,11 @@ module ThumbsUp #:nodoc:
         # If you want to nullify (and keep the votes), you'll need to remove
         # the unique constraint on the [ voter, voteable ] index in the database.
         # has_many :votes, :as => :voter, :dependent => :nullify
-        # Destroy votes when a user is deleted.
-        has_many :votes, :as => :voter, :dependent => :destroy
+        # Destroy voter's votes when the voter is deleted.
+        has_many ThumbsUp.configuration[:voter_relationship_name],
+                 :as => :voter,
+                 :dependent => :destroy,
+                 :class_name => 'Vote'
 
         include ThumbsUp::ActsAsVoter::InstanceMethods
         extend  ThumbsUp::ActsAsVoter::SingletonMethods
@@ -27,12 +30,17 @@ module ThumbsUp #:nodoc:
     # This module contains instance methods
     module InstanceMethods
 
+      # wraps the dynamic, configured, relationship name
+      def _votes_by
+        self.send(ThumbsUp.configuration[:voter_relationship_name])
+      end
+
       # Usage user.vote_count(:up)  # All +1 votes
       #       user.vote_count(:down) # All -1 votes
       #       user.vote_count()      # All votes
 
       def vote_count(for_or_against = :all)
-        v = Vote.where(:voter_id => id).where(:voter_type => self.class.name)
+        v = Vote.where(:voter_id => id).where(:voter_type => self.class.base_class.name)
         v = case for_or_against
           when :all   then v
           when :up    then v.where(:vote => true)
@@ -52,9 +60,9 @@ module ThumbsUp #:nodoc:
       def voted_on?(voteable)
         0 < Vote.where(
               :voter_id => self.id,
-              :voter_type => self.class.name,
+              :voter_type => self.class.base_class.name,
               :voteable_id => voteable.id,
-              :voteable_type => voteable.class.name
+              :voteable_type => voteable.class.base_class.name
             ).count
       end
 
@@ -80,27 +88,48 @@ module ThumbsUp #:nodoc:
           self.unvote_for(voteable)
         end
         direction = (options[:direction].to_sym == :up)
-        Vote.create!(:vote => direction, :voteable => voteable, :voter => self)
+        # create! does not return the created object
+        v = Vote.new(:vote => direction, :voteable => voteable, :voter => self)
+        v.save!
+        v
       end
 
       def unvote_for(voteable)
         Vote.where(
           :voter_id => self.id,
-          :voter_type => self.class.name,
+          :voter_type => self.class.base_class.name,
           :voteable_id => voteable.id,
-          :voteable_type => voteable.class.name
+          :voteable_type => voteable.class.base_class.name
         ).map(&:destroy)
       end
+
+      alias_method :clear_votes, :unvote_for
 
       def voted_which_way?(voteable, direction)
         raise ArgumentError, "expected :up or :down" unless [:up, :down].include?(direction)
         0 < Vote.where(
               :voter_id => self.id,
-              :voter_type => self.class.name,
+              :voter_type => self.class.base_class.name,
               :vote => direction == :up ? true : false,
               :voteable_id => voteable.id,
-              :voteable_type => voteable.class.name
+              :voteable_type => voteable.class.base_class.name
             ).count
+      end
+
+      def voted_how?(voteable)
+        votes = Vote.where(
+              :voter_id => self.id,
+              :voter_type => self.class.base_class.name,
+              :voteable_id => voteable.id,
+              :voteable_type => voteable.class.base_class.name
+            ).map(&:vote) #in case votes is premitted to be duplicated
+        if votes.count == 1
+          votes.first
+        elsif votes.count == 0
+          nil
+        else
+          votes
+        end
       end
 
     end

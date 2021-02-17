@@ -1,0 +1,11 @@
+language: ruby
+rvm:
+  - 2.6.3
+services:
+  - mysql
+  - postgresql
+before_install:
+  - "mysql -e 'create database thumbs_up_test;'"
+  - psql -c 'create database thumbs_up_test;' -U postgres
+  - bundle update
+  - gem update bundler

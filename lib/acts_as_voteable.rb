@@ -2,12 +2,16 @@ module ThumbsUp
   module ActsAsVoteable #:nodoc:
 
     def self.included(base)
+      base.extend ThumbsUp::Base
       base.extend ClassMethods
     end
 
     module ClassMethods
       def acts_as_voteable
-        has_many :votes, :as => :voteable, :dependent => :destroy
+        has_many ThumbsUp.configuration[:voteable_relationship_name],
+                 :as => :voteable,
+                 :dependent => :destroy,
+                 :class_name => 'Vote'
 
         include ThumbsUp::ActsAsVoteable::InstanceMethods
         extend  ThumbsUp::ActsAsVoteable::SingletonMethods
@@ -15,79 +19,35 @@ module ThumbsUp
     end
 
     module SingletonMethods
-      
-      # The point of this function is to return rankings based on the difference between up and down votes
-      # assuming equal weighting (i.e. a user with 1 up vote and 1 down vote has a Vote_Total of 0.
-      # First the votes table is joined twiced so that the Vote_Total can be calculated for every ID
-      # Then this table is joined against the specific table passed to this function to allow for
-      # ranking of the items within that table based on the difference between up and down votes.
-            # Options:
-      #  :start_at            - Restrict the votes to those created after a certain time
-      #  :end_at              - Restrict the votes to those created before a certain time
-      #  :ascending           - Default false - normal order DESC (i.e. highest rank to lowest)
-      #  :at_least            - Default 1 - Item must have at least X votes
-      #  :at_most             - Item may not have more than X votes
-      #  :conditions          - (string) Extra conditions, if you'd like.
-      def plusminus_tally(*args)
-        options = args.extract_options!
 
-        tsub0 = Vote
-        tsub0 = tsub0.where("vote = ?", false)
-        tsub0 = tsub0.where("voteable_type = ?", self.name)
-        tsub0 = tsub0.group("voteable_id")
-        tsub0 = tsub0.select("DISTINCT voteable_id, COUNT(vote) as votes_against")
-
-        tsub1 = Vote
-        tsub1 = tsub1.where("vote = ?", true)
-        tsub1 = tsub1.where("voteable_type = ?", self.name)
-        tsub1 = tsub1.group("voteable_id")
-        tsub1 = tsub1.select("DISTINCT voteable_id, COUNT(vote) as votes_for")
-
-        t = self.joins("LEFT OUTER JOIN (SELECT DISTINCT #{Vote.table_name}.*,
-            (COALESCE(vfor.votes_for, 0)-COALESCE(against.votes_against, 0)) AS vote_total
-            FROM (#{Vote.table_name} LEFT JOIN
-            (#{tsub0.to_sql}) AS against ON #{Vote.table_name}.voteable_id = against.voteable_id)
-            LEFT JOIN
-            (#{tsub1.to_sql}) as vfor ON #{Vote.table_name}.voteable_id = vfor.voteable_id)
-            AS joined_#{Vote.table_name} ON #{self.table_name}.#{self.primary_key} =
-            joined_#{Vote.table_name}.voteable_id")
-
-            t = t.group("joined_#{Vote.table_name}.voteable_id, joined_#{Vote.table_name}.vote_total, #{column_names_for_tally}")
-            t = t.limit(options[:limit]) if options[:limit]
-            t = t.where("joined_#{Vote.table_name}.voteable_type = '#{self.name}'")
-            t = t.where("joined_#{Vote.table_name}.created_at >= ?", options[:start_at]) if options[:start_at]
-            t = t.where("joined_#{Vote.table_name}.created_at <= ?", options[:end_at]) if options[:end_at]
-            t = t.where(options[:conditions]) if options[:conditions]
-            t = options[:ascending] ? t.order("joined_#{Vote.table_name}.vote_total") : t.order("joined_#{Vote.table_name}.vote_total DESC")
-
-            t = t.having([
-                  "COUNT(joined_#{Vote.table_name}.voteable_id) > 0",
-                  (options[:at_least] ?
-                    "joined_#{Vote.table_name}.vote_total >= #{sanitize(options[:at_least])}" : nil
-                  ),
-                  (options[:at_most] ?
-                    "joined_#{Vote.table_name}.vote_total <= #{sanitize(options[:at_most])}" : nil
-                  )
-                ].compact.join(' AND '))
-
-            t.select("#{self.table_name}.*, joined_#{Vote.table_name}.vote_total")
+      # Calculate the plusminus for a group of voteables in one database query.
+      # This returns an Arel relation, so you can add conditions as you like chained on to
+      # this method call.
+      # i.e. Posts.tally.where('votes.created_at > ?', 2.days.ago)
+      # You can also have the upvotes and downvotes returned separately in the same query:
+      # Post.plusminus_tally(:separate_updown => true)
+      def plusminus_tally(params = {})
+        t = self.joins("LEFT OUTER JOIN #{Vote.table_name} ON #{self.table_name}.id = #{Vote.table_name}.voteable_id AND #{Vote.table_name}.voteable_type = '#{self.name}'")
+        t = t.order("plusminus_tally DESC")
+        t = t.group(column_names_for_tally)
+        t = t.select("#{self.table_name}.*")
+        t = t.select("SUM(CASE #{Vote.table_name}.vote WHEN #{quoted_true} THEN 1 WHEN #{quoted_false} THEN -1 ELSE 0 END) AS plusminus_tally")
+        if params[:separate_updown]
+          t = t.select("SUM(CASE #{Vote.table_name}.vote WHEN #{quoted_true} THEN 1 WHEN #{quoted_false} THEN 0 ELSE 0 END) AS up")
+          t = t.select("SUM(CASE #{Vote.table_name}.vote WHEN #{quoted_true} THEN 0 WHEN #{quoted_false} THEN 1 ELSE 0 END) AS down")
+        end
+        t = t.select("COUNT(#{Vote.table_name}.id) AS vote_count")
       end
-      
+
       # #rank_tally is depreciated.
       alias_method :rank_tally, :plusminus_tally
 
       # Calculate the vote counts for all voteables of my type.
-      # This method returns all voteables with at least one vote.
+      # This method returns all voteables (even without any votes) by default.
       # The vote count for each voteable is available as #vote_count.
-      #
-      # Options:
-      #  :start_at    - Restrict the votes to those created after a certain time
-      #  :end_at      - Restrict the votes to those created before a certain time
-      #  :conditions  - A piece of SQL conditions to add to the query
-      #  :limit       - The maximum number of voteables to return
-      #  :order       - A piece of SQL to order by. Eg 'vote_count DESC' or 'voteable.created_at DESC'
-      #  :at_least    - Item must have at least X votes
-      #  :at_most     - Item may not have more than X votes
+      # This returns an Arel relation, so you can add conditions as you like chained on to
+      # this method call.
+      # i.e. Posts.tally.where('votes.created_at > ?', 2.days.ago)
       def tally(*args)
         options = args.extract_options!
 
@@ -131,41 +91,68 @@ module ThumbsUp
 
     module InstanceMethods
 
+      # wraps the dynamic, configured, relationship name
+      def _votes_on
+        self.send(ThumbsUp.configuration[:voteable_relationship_name])
+      end
+
       def votes_for
-        Vote.where(:voteable_id => id, :voteable_type => self.class.name, :vote => true).count
+        self._votes_on.where(:vote => true).count
       end
 
       def votes_against
-        Vote.where(:voteable_id => id, :voteable_type => self.class.name, :vote => false).count
+        self._votes_on.where(:vote => false).count
       end
 
       def percent_for
-        (votes_for.to_f * 100 / (self.votes.size + 0.0001)).round
+        (votes_for.to_f * 100 / (self._votes_on.size + 0.0001)).round
       end
 
       def percent_against
-        (votes_against.to_f * 100 / (self.votes.size + 0.0001)).round
+        (votes_against.to_f * 100 / (self._votes_on.size + 0.0001)).round
       end
 
       # You'll probably want to use this method to display how 'good' a particular voteable
       # is, and/or sort based on it.
+      # If you're using this for a lot of voteables, then you'd best use the #plusminus_tally
+      # method above.
       def plusminus
-        votes_for - votes_against
+        respond_to?(:plusminus_tally) ? plusminus_tally : (votes_for - votes_against)
+      end
+
+      # The lower bound of a Wilson Score with a default confidence interval of 95%. Gives a more accurate representation of average rating (plusminus) based on the number of positive ratings and total ratings.
+      # http://evanmiller.org/how-not-to-sort-by-average-rating.html
+      def ci_plusminus(confidence = 0.95)
+        require 'statistics2'
+        n = self._votes_on.size
+        if n == 0
+          return 0
+        end
+        z = Statistics2.pnormaldist(1 - (1 - confidence) / 2)
+        phat = 1.0 * votes_for / n
+        (phat + z * z / (2 * n) - z * Math.sqrt((phat * (1 - phat) + z * z / (4 * n)) / n)) / (1 + z * z / n)
       end
 
       def votes_count
-        self.votes.size
+        _votes_on.size
       end
 
       def voters_who_voted
-        self.votes.map(&:voter).uniq
+        _votes_on.map(&:voter).uniq
+      end
+
+      def voters_who_voted_for
+          _votes_on.where(:vote => true).map(&:voter).uniq
+      end
+
+      def voters_who_voted_against
+          _votes_on.where(:vote => false).map(&:voter).uniq
       end
 
       def voted_by?(voter)
         0 < Vote.where(
               :voteable_id => self.id,
-              :voteable_type => self.class.name,
-              :voter_type => voter.class.name,
+              :voteable_type => self.class.base_class.name,
               :voter_id => voter.id
             ).count
       end

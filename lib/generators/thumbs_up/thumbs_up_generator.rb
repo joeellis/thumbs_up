@@ -5,7 +5,7 @@ class ThumbsUpGenerator < Rails::Generators::Base
   include Rails::Generators::Migration
 
   source_root File.expand_path('../templates', __FILE__)
-  
+
   class_option :unique_voting, :type => :boolean, :default => true, :desc => 'Do you want only one vote allowed per voter? (default: true)'
 
   # Implement the required interface for Rails::Generators::Migration.
@@ -18,7 +18,7 @@ class ThumbsUpGenerator < Rails::Generators::Base
     end
   end
 
-  def create_migration
+  def create_thumbs_up_migration
     migration_template 'migration.rb', File.join('db', 'migrate', 'thumbs_up_migration.rb')
   end
 
